@@ -1,0 +1,248 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Energy Dashboard</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+    <style>
+        body { background: #f8f9fa; }
+        .sidebar { background: #343a40; color: #fff; min-height: 100vh; padding: 20px; }
+        .main-content { padding: 20px; }
+        .card { margin-bottom: 20px; }
+        .form-label { font-weight: 500; }
+        .help-text { font-size: 0.9em; color: #6c757d; }
+    </style>
+</head>
+<body>
+<div class="container-fluid">
+    <div class="row">
+        <!-- Sidebar -->
+        <div class="col-md-3 col-lg-2 sidebar">
+            <h3>Energy Dashboard</h3>
+            <div class="mb-3">
+                <label class="form-label">City</label>
+                <select class="form-select" id="citySelect">
+                    {% for city in cities %}
+                    <option value="{{ city }}">{{ city }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="mb-3">
+                <label class="form-label">Date Range</label>
+                <input type="date" class="form-control mb-2" id="startDate" min="{{ min_date }}" max="{{ max_date }}">
+                <input type="date" class="form-control" id="endDate" min="{{ min_date }}" max="{{ max_date }}">
+            </div>
+            <div class="mb-3">
+                <label class="form-label">Model Selection</label>
+                <div>
+                    <input type="checkbox" id="LinearRegression" checked> Linear Regression<br>
+                    <input type="checkbox" id="RandomForest"> Random Forest<br>
+                    <input type="checkbox" id="XGBoost"> XGBoost<br>
+                    <input type="checkbox" id="Stacking"> Stacking<br>
+                    <input type="checkbox" id="ARIMA"> ARIMA
+                </div>
+            </div>
+            <div class="mb-3" id="kSliderDiv">
+                <label class="form-label">Number of Clusters (k)</label>
+                <input type="range" class="form-range" id="kSlider" min="2" max="8" value="4">
+                <div class="text-center" id="kValue">4</div>
+            </div>
+            <div class="mb-3" id="dbscanParams" style="display:none;">
+                <label class="form-label">DBSCAN Parameters</label>
+                <div class="mb-2">
+                    <label for="epsSlider" class="form-label">Epsilon (eps): <span id="epsValue">0.5</span></label>
+                    <input type="range" class="form-range" id="epsSlider" min="0.05" max="2" step="0.05" value="0.5">
+                </div>
+                <div>
+                    <label for="minSamplesSlider" class="form-label">Min Samples: <span id="minSamplesValue">5</span></label>
+                    <input type="range" class="form-range" id="minSamplesSlider" min="2" max="20" value="5">
+                </div>
+                <div class="help-text">DBSCAN does not use k. Adjust eps and min_samples for clustering sensitivity.</div>
+            </div>
+            <div class="mb-3">
+                <label class="form-label">Clustering Algorithm</label>
+                <select class="form-select" id="clusterAlgoSelect">
+                    <option value="kmeans" selected>K-Means</option>
+                    <option value="dbscan">DBSCAN</option>
+                    <option value="hierarchical">Hierarchical</option>
+                </select>
+            </div>
+            <div class="mb-3">
+                <label class="form-label">Projection Method</label>
+                <select class="form-select" id="projectionSelect">
+                    <option value="pca" selected>PCA</option>
+                    <option value="tsne">t-SNE</option>
+                </select>
+            </div>
+            <button class="btn btn-primary w-100" onclick="updateVisualizations()">Update</button>
+            <div class="mt-4 help-text">
+                <b>Instructions:</b><br>
+                1. Select city and date range.<br>
+                2. Choose models to compare.<br>
+                3. Adjust clusters (k) for analysis.<br>
+                4. Choose clustering algorithm for analysis.<br>
+                5. Click Update to refresh plots.<br>
+            </div>
+        </div>
+        <!-- Main Content -->
+        <div class="col-md-9 col-lg-10 main-content">
+            <div class="row">
+                <div class="col-12">
+                    <div class="card">
+                        <div class="card-body">
+                            <h5>Demand Forecast</h5>
+                            <div class="help-text mb-2">Actual vs. predicted demand for selected city/date/models.</div>
+                            <div id="forecastPlot" style="height: 400px;"></div>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-12">
+                    <div class="card">
+                        <div class="card-body">
+                            <h5>Cluster Analysis</h5>
+                            <div class="help-text mb-2">PCA scatter plot colored by cluster.</div>
+                            <div id="clusterPlot" style="height: 400px;"></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+<script>
+document.getElementById('startDate').value = '{{ min_date }}';
+document.getElementById('endDate').value = '{{ max_date }}';
+document.getElementById('kSlider').oninput = function() {
+    document.getElementById('kValue').innerText = this.value;
+};
+document.getElementById('epsSlider').oninput = function() {
+    document.getElementById('epsValue').innerText = this.value;
+};
+document.getElementById('minSamplesSlider').oninput = function() {
+    document.getElementById('minSamplesValue').innerText = this.value;
+};
+document.getElementById('clusterAlgoSelect').onchange = function() {
+    if (this.value === 'dbscan') {
+        document.getElementById('kSliderDiv').style.display = 'none';
+        document.getElementById('dbscanParams').style.display = '';
+    } else {
+        document.getElementById('kSliderDiv').style.display = '';
+        document.getElementById('dbscanParams').style.display = 'none';
+    }
+};
+
+function getSelectedModels() {
+    let models = [];
+    if (document.getElementById('LinearRegression').checked) models.push('Linear Regression');
+    if (document.getElementById('RandomForest').checked) models.push('Random Forest');
+    if (document.getElementById('XGBoost').checked) models.push('XGBoost');
+    if (document.getElementById('Stacking').checked) models.push('Stacking');
+    if (document.getElementById('ARIMA').checked) models.push('ARIMA');
+    return models;
+}
+
+function updateVisualizations() {
+    const city = document.getElementById('citySelect').value;
+    const startDate = document.getElementById('startDate').value;
+    const endDate = document.getElementById('endDate').value;
+    const clusterAlgo = document.getElementById('clusterAlgoSelect').value;
+    const projection = document.getElementById('projectionSelect').value;
+    let k = document.getElementById('kSlider').value;
+    let eps = document.getElementById('epsSlider').value;
+    let min_samples = document.getElementById('minSamplesSlider').value;
+    if (clusterAlgo !== 'dbscan') {
+        eps = undefined;
+        min_samples = undefined;
+    }
+
+    // Forecast plot
+    let checkedModels = getSelectedModels();
+    if (checkedModels.length === 0) {
+        Plotly.newPlot('forecastPlot', [], {title: 'No data available'});
+        return;
+    }
+    let actualTrace = null;
+    let traces = checkedModels.map(model =>
+        fetch('/get_forecast', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({city, start_date: startDate, end_date: endDate, model})
+        }).then(res => res.json().then(data => ({model, data})))
+    );
+    Promise.all(traces).then(results => {
+        let forecastTraces = [];
+        results.forEach(({model, data}) => {
+            if (data.error) return;
+            if (!actualTrace) {
+                actualTrace = {
+                    x: data.dates,
+                    y: data.actual,
+                    name: 'Actual',
+                    type: 'scatter',
+                    line: {color: '#FFD700', width: 3}
+                };
+            }
+            forecastTraces.push({
+                x: data.dates,
+                y: data.predicted,
+                name: model,
+                type: 'scatter',
+                line: {width: 2}
+            });
+        });
+        if (actualTrace) forecastTraces.unshift(actualTrace);
+        Plotly.newPlot('forecastPlot', forecastTraces, {
+            title: 'Energy Demand Forecast',
+            xaxis: {title: 'Date'},
+            yaxis: {title: 'Demand (MWh)'},
+            showlegend: true,
+            legend: {
+                x: 1,
+                xanchor: 'right',
+                y: 1,
+                bgcolor: 'rgba(255, 255, 255, 0.8)',
+                bordercolor: 'rgba(0, 0, 0, 0.2)',
+                borderwidth: 1
+            }
+        });
+    });
+
+    // Cluster plot
+    fetch('/get_clusters', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({city, start_date: startDate, end_date: endDate, k, cluster_algo: clusterAlgo, eps, min_samples, projection})
+    })
+    .then(res => res.json())
+    .then(data => {
+        if (data.error) {
+            Plotly.newPlot('clusterPlot', [], {title: 'No data available'});
+            return;
+        }
+        let traces = [];
+        let uniqueClusters = [...new Set(data.clusters)];
+        uniqueClusters.forEach(cluster => {
+            let mask = data.clusters.map(c => c === cluster);
+            traces.push({
+                x: data.pca1.filter((_, i) => mask[i]),
+                y: data.pca2.filter((_, i) => mask[i]),
+                mode: 'markers',
+                name: `Cluster ${cluster}`,
+                type: 'scatter',
+                marker: { size: 8, line: { width: 1, color: '#fff' } }
+            });
+        });
+        Plotly.newPlot('clusterPlot', traces, {
+            title: 'PCA Cluster Visualization',
+            xaxis: {title: 'PC1'},
+            yaxis: {title: 'PC2'},
+            showlegend: true
+        });
+    });
+}
+updateVisualizations();
+</script>
+</body>
+</html> 
